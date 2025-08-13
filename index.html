@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Bill Scanner + Gemini AI + Google Sheets</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f0f2f6; color: #333; padding: 2rem; }
+        .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        h1 { color: #1a73e8; text-align: center; }
+        textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; margin-top: 10px; }
+        .file-uploader, .manual-fields, .gemini-section { margin-bottom: 2rem; }
+        input[type="text"], input[type="file"] { width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { background-color: #1a73e8; color: white; padding: 12px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; width: 100%; margin-top: 10px; }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; }
+        button:hover:not(:disabled) { background-color: #155ab6; }
+        .auth-buttons button { background-color: #34a853; width: calc(50% - 5px); display: inline-block; }
+        .auth-buttons button:hover:not(:disabled) { background-color: #2c8f42; }
+        #loader { display: none; text-align: center; margin: 20px 0; }
+        .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #1a73e8; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .error { color: #d93025; background: #f8d7da; padding: 10px; border: 1px solid #f5c6cb; border-radius: 4px; margin-bottom: 1rem; }
+        .success { color: #155724; background: #d4edda; padding: 10px; border: 1px solid #c3e6cb; border-radius: 4px; margin-bottom: 1rem; }
+        .info { color: #0c5460; background: #d1ecf1; padding: 10px; border: 1px solid #bee5eb; border-radius: 4px; margin-bottom: 1rem; }
+        .json-output { background: #e9ecef; padding: 1rem; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; max-height: 400px; overflow-y: auto; }
+    </style>
+
+    <!-- External Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.min.js"></script>
+    <script src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+    <!-- Google API Libraries -->
+    <script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
+    <script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
+
+    <script>
+        // --- START: REQUIRED KEYS (REPLACE THESE IF YOU HAVEN'T) ---
+        // Make sure these keys are correct
+        const GEMINI_API_KEY = "AIzaSyCDEGN1ZXXVda9yhp2bHhpzT5yncr66CKY"; // <--- ⚠️ PASTE YOUR GEMINI API KEY HERE
+        const GOOGLE_CLOUD_API_KEY = "AIzaSyBzpd32TmhuLyFjZ7t3J4__KuY7c3Gm-P0"; // <--- ⚠️ PASTE YOUR GOOGLE CLOUD API KEY HERE
+        const GOOGLE_CLIENT_ID = '316419019852-4dum2avurto1fv23lm0mrehl6pa8k103.apps.googleusercontent.com'; // <--- ⚠️ PASTE YOUR NEW CLIENT ID HERE
+        const SPREADSHEET_ID = '1j359MdhUs9mScAnC7T0fB33LAZY2F_WISLxAbgGnHDM';
+        // --- END: REQUIRED KEYS ---
+
+        // This script block is now in the HEAD so functions are defined before they are called.
+        
+        // --- Google Sheets Integration ---
+        let tokenClient;
+        let gapiInited = false;
+        let gisInited = false;
+
+        function gapiLoaded() {
+            gapi.load('client', initializeGapiClient);
+        }
+
+        async function initializeGapiClient() {
+            try {
+                await gapi.client.init({
+                    apiKey: GOOGLE_CLOUD_API_KEY,
+                    discoveryDocs: ["https://sheets.googleapis.com/$discovery/rest?version=v4"],
+                });
+                gapiInited = true;
+                maybeEnableAuthButtons();
+            } catch (error) {
+                console.error("Error initializing GAPI client:", error);
+                document.getElementById('status-area').innerHTML = `<div class="error">Could not initialize Google API. Check your Google Cloud API Key and ensure the Google Sheets API is enabled.</div>`;
+            }
+        }
+
+        function gisLoaded() {
+            try {
+                tokenClient = google.accounts.oauth2.initTokenClient({
+                    client_id: GOOGLE_CLIENT_ID,
+                    scope: 'https://www.googleapis.com/auth/spreadsheets',
+                    callback: '', // Will be set dynamically
+                });
+                gisInited = true;
+                maybeEnableAuthButtons();
+            } catch (error) {
+                console.error("Error initializing GIS client:", error);
+                document.getElementById('status-area').innerHTML = `<div class="error">Could not initialize Google Sign-In. Check your Google Client ID and OAuth configuration in the Cloud Console.</div>`;
+            }
+        }
+        
+        function maybeEnableAuthButtons() {
+            if (gapiInited && gisInited) {
+                document.getElementById('authorize_button').style.visibility = 'visible';
+            }
+        }
+        
+        function maybeEnableGetDataButton() {
+            // This function might be called before gapi.client is ready.
+            if (gapi && gapi.client && typeof gapi.client.getToken === 'function') {
+                const hasToken = gapi.client.getToken() !== null;
+                const hasText = document.getElementById('extracted-text-output').value.trim() !== "";
+                document.getElementById('get-data-btn').disabled = !(hasToken && hasText);
+            }
+        }
+
+        function handleAuthClick() {
+            if (!tokenClient) {
+                console.error("Token client not initialized.");
+                return;
+            }
+            tokenClient.callback = (resp) => {
+                if (resp.error !== undefined) {
+                    console.error("Auth Error:", resp);
+                    throw(resp);
+                }
+                document.getElementById('signout_button').style.visibility = 'visible';
+                document.getElementById('authorize_button').innerText = 'Refresh Token';
+                showStatus('success', 'Authorization successful! You can now process the bill.');
+                maybeEnableGetDataButton();
+            };
+
+            if (gapi.client.getToken() === null) {
+                tokenClient.requestAccessToken({prompt: 'consent'});
+            } else {
+                tokenClient.requestAccessToken({prompt: ''});
+            }
+        }
+
+        function handleSignoutClick() {
+            const token = gapi.client.getToken();
+            if (token !== null) {
+                google.accounts.oauth2.revoke(token.access_token);
+                gapi.client.setToken('');
+                document.getElementById('signout_button').style.visibility = 'hidden';
+                document.getElementById('authorize_button').innerText = 'Authorize Google Sheets';
+                document.getElementById('get-data-btn').disabled = true;
+                showStatus('info', 'You have been signed out.');
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div class="container">
+        <h1>📄 PDF Bill Scanner + Gemini AI ➡️ Google Sheets</h1>
+        <div class="file-uploader"><label for="pdf-upload"><b>1. Upload your PDF bill</b></label><input type="file" id="pdf-upload" accept=".pdf"></div>
+        <div id="status-area"></div>
+        <div id="extracted-text-section" style="display:none;"><h3>📜 Extracted Text</h3><textarea id="extracted-text-output" rows="10" readonly></textarea></div>
+        <div class="manual-fields"><h3>📝 2. Additional Bill Details (Manual Entry)</h3><input type="text" id="bill-source" placeholder="Bill Source"><input type="text" id="bill-given-by" placeholder="Bill Given By"><input type="text" id="hod-approval" placeholder="HOD for Approval"><input type="text" id="final-approval" placeholder="Final Approval"></div>
+        
+        <div class="gemini-section">
+            <h3>🤖 3. Process and Send to Google Sheets</h3>
+            <div class="auth-buttons">
+                <button id="authorize_button" style="visibility: hidden;">Authorize Google Sheets</button>
+                <button id="signout_button" style="visibility: hidden;">Sign Out</button>
+            </div>
+            <button id="get-data-btn" disabled>Get Data & Add to Sheet</button>
+        </div>
+
+        <div id="loader"><div class="spinner"></div><p>Processing... Please wait.</p></div>
+        <div id="results"></div>
+        <div id="download-section" style="margin-top: 20px;"></div>
+    </div>
+
+    <script>
+        // This script block now mainly deals with DOM manipulation and can stay here.
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@3.4.120/build/pdf.worker.min.js`;
+
+        const pdfUpload = document.getElementById('pdf-upload');
+        const getDataBtn = document.getElementById('get-data-btn');
+        const extractedTextOutput = document.getElementById('extracted-text-output');
+        const extractedTextSection = document.getElementById('extracted-text-section');
+        const statusArea = document.getElementById('status-area');
+        const loader = document.getElementById('loader');
+        const resultsDiv = document.getElementById('results');
+        const downloadSection = document.getElementById('download-section');
+        const authorizeButton = document.getElementById('authorize_button');
+        const signoutButton = document.getElementById('signout_button');
+
+        // Attach event listeners now that the DOM is ready
+        authorizeButton.onclick = handleAuthClick;
+        signoutButton.onclick = handleSignoutClick;
+        
+        let billData = []; // Stores data for Excel download
+
+        const DEFAULT_PROMPT = `Scan this bill and tell me the following details in JSON format:\n1. Name of the Vendor\n2. Name of the company on which this bill has been raise\n3. Nature of expense\n4. Is TDS Applicable on this bill? If yes, what is the rate and amount?\n5. Is GST under RCM applicable?\n6. Is GST Input included in the bill?\n7. Is the nature of IGST or CGST and SGST as per Place of Supply in GST correct?\n8. What is the final amount payable to the vendor?\n9. Are there any remarks mentioned in the bill?\nReturn ONLY valid JSON without any extra text, explanation, or markdown formatting.`;
+
+        pdfUpload.addEventListener('change', async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            resultsDiv.innerHTML = '';
+            downloadSection.innerHTML = '';
+            extractedTextOutput.value = '';
+            getDataBtn.disabled = true;
+            extractedTextSection.style.display = 'block';
+
+            showStatus('info', 'Step 1: Reading PDF file...');
+            const fileReader = new FileReader();
+
+            fileReader.onload = async function() {
+                const typedarray = new Uint8Array(this.result);
+                let extractedText = "";
+                try {
+                    const pdf = await pdfjsLib.getDocument({data: typedarray}).promise;
+                    let textContent = '';
+                    for (let i = 1; i <= pdf.numPages; i++) {
+                        const page = await pdf.getPage(i);
+                        const text = await page.getTextContent();
+                        if (text.items.length > 0) {
+                            textContent += text.items.map(s => s.str).join(' ') + '\n';
+                        }
+                    }
+                    extractedText = textContent.trim();
+
+                    if (!extractedText) {
+                        showStatus('info', 'No direct text found. Starting OCR... This may take a moment.');
+                        let ocrText = '';
+                        for (let i = 1; i <= pdf.numPages; i++) {
+                            showStatus('info', `Processing Page ${i}/${pdf.numPages} with OCR...`);
+                            const page = await pdf.getPage(i);
+                            const viewport = page.getViewport({ scale: 2.0 });
+                            const canvas = document.createElement('canvas');
+                            const context = canvas.getContext('2d');
+                            canvas.height = viewport.height;
+                            canvas.width = viewport.width;
+                            await page.render({ canvasContext: context, viewport: viewport }).promise;
+                            const imageDataUrl = canvas.toDataURL('image/png');
+                            const worker = await Tesseract.createWorker('eng');
+                            const { data: { text } } = await worker.recognize(imageDataUrl);
+                            ocrText += text + '\n';
+                            await worker.terminate();
+                        }
+                        extractedText = ocrText.trim();
+                    }
+
+                    if (extractedText) {
+                        extractedTextOutput.value = extractedText;
+                        showStatus('success', 'Text extracted! Please fill manual details and authorize Google Sheets.');
+                        maybeEnableGetDataButton();
+                    } else {
+                        showStatus('error', 'Could not extract any text from the PDF.');
+                    }
+                } catch (error) {
+                    console.error("Processing Error:", error);
+                    showStatus('error', 'An error occurred while processing the PDF. Check console for details.');
+                }
+            };
+            fileReader.readAsArrayBuffer(file);
+        });
+
+        getDataBtn.addEventListener('click', async () => {
+            const billSource = document.getElementById('bill-source').value;
+            const billGivenBy = document.getElementById('bill-given-by').value;
+            const hodApproval = document.getElementById('hod-approval').value;
+            const finalApproval = document.getElementById('final-approval').value;
+
+            if (extractedTextOutput.value.trim() === "") { showStatus('error', 'Please upload a PDF and wait for text extraction.'); return; }
+            if (!billSource || !billGivenBy || !hodApproval || !finalApproval) { showStatus('error', 'Please fill all manual fields.'); return; }
+
+            loader.style.display = 'block';
+            resultsDiv.innerHTML = '';
+            downloadSection.innerHTML = '';
+            loader.querySelector('p').innerText = "Processing with Gemini...";
+
+            const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
+            const payload = { contents: [{ parts: [{ text: `${DEFAULT_PROMPT}\n\nBill Text:\n${extractedTextOutput.value}` }] }] };
+
+            try {
+                const response = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error ? errorData.error.message : `API request failed with status ${response.status}`);
+                }
+                const data = await response.json();
+                let geminiText = data.candidates[0].content.parts[0].text;
+                const jsonMatch = geminiText.match(/\{[\s\S]*\}/);
+
+                if (jsonMatch) {
+                    const jsonString = jsonMatch[0];
+                    const parsedData = JSON.parse(jsonString);
+                    
+                    parsedData["Bill Source"] = billSource;
+                    parsedData["Bill Given By"] = billGivenBy;
+                    parsedData["HOD Approval"] = hodApproval;
+                    parsedData["Final Approval"] = finalApproval;
+
+                    billData.push(parsedData); 
+                    showStatus('success', 'Data Extracted from Gemini! Now sending to Google Sheets...', true);
+                    displayDataAsTable(parsedData);
+                    createDownloadButton();
+                    
+                    loader.querySelector('p').innerText = "Sending data to Google Sheets...";
+                    await appendToSheet(parsedData);
+
+                } else {
+                    showStatus('error', 'No valid JSON object found in Gemini response.', true);
+                    resultsDiv.innerHTML = `<pre class="json-output">${geminiText}</pre>`;
+                }
+            } catch (error) {
+                console.error('Gemini API/Processing Error:', error);
+                showStatus('error', `Error: ${error.message}`, true);
+            } finally {
+                loader.style.display = 'none';
+            }
+        });
+        
+        async function appendToSheet(data) {
+            let sheetRange = 'Sheet1';
+            let headers = Object.keys(data);
+            let values = Object.values(data);
+            
+            try {
+                const getResponse = await gapi.client.sheets.spreadsheets.values.get({
+                    spreadsheetId: SPREADSHEET_ID,
+                    range: sheetRange + '!A1:A1',
+                });
+
+                let rowsToAppend;
+                if (!getResponse.result.values) {
+                    rowsToAppend = [headers, values];
+                } else {
+                    rowsToAppend = [values];
+                }
+
+                const result = await gapi.client.sheets.spreadsheets.values.append({
+                    spreadsheetId: SPREADSHEET_ID,
+                    range: sheetRange,
+                    valueInputOption: 'USER_ENTERED',
+                    resource: {
+                        values: rowsToAppend
+                    }
+                });
+                console.log('Sheet append result:', result);
+                showStatus('success', `Data successfully added to Google Sheet! View it <a href="https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/" target="_blank">here</a>.`, true);
+            } catch (err) {
+                console.error('Error appending data to sheet:', err);
+                let errorMessage = err.result?.error?.message || 'Could not add data to Google Sheet. Check console for details.';
+                showStatus('error', errorMessage, true);
+            }
+        }
+
+        // --- Helper Functions ---
+        function displayDataAsTable(data) {
+            let table = '<table>';
+            for (const key in data) {
+                 table += `<tr><td style="font-weight: bold; padding: 5px 15px 5px 5px; vertical-align: top;">${key}</td><td>${data[key]}</td></tr>`;
+            }
+            table += '</table>';
+            resultsDiv.innerHTML = table;
+        }
+
+        function createDownloadButton() {
+            const button = document.createElement('button');
+            button.innerText = 'Download All Extracted Data (Excel)';
+            button.style.backgroundColor = '#ff9800'; // Orange color
+            button.onclick = () => {
+                if (billData.length === 0) { alert("No data to download."); return; }
+                const worksheet = XLSX.utils.json_to_sheet(billData);
+                const workbook = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(workbook, worksheet, "Bills");
+                XLSX.writeFile(workbook, "bill_data.xlsx");
+            };
+            downloadSection.innerHTML = '';
+            downloadSection.appendChild(button);
+        }
+
+        function showStatus(type, message, isResult = false) {
+            const targetDiv = isResult ? resultsDiv : statusArea;
+            targetDiv.innerHTML = `<div class="${type}">${message}</div>`;
+        }
+    </script>
+</body>
+</html>
