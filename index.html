@@ -5,24 +5,140 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PDF Bill Scanner + Gemini AI + Google Sheets</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f0f2f6; color: #333; padding: 2rem; }
-        .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
-        h1 { color: #1a73e8; text-align: center; }
-        textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; margin-top: 10px; }
-        .file-uploader, .manual-fields, .gemini-section { margin-bottom: 2rem; }
-        input[type="text"], input[type="file"] { width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        button { background-color: #1a73e8; color: white; padding: 12px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; width: 100%; margin-top: 10px; }
-        button:disabled { background-color: #cccccc; cursor: not-allowed; }
-        button:hover:not(:disabled) { background-color: #155ab6; }
-        .auth-buttons button { background-color: #34a853; width: calc(50% - 5px); display: inline-block; }
-        .auth-buttons button:hover:not(:disabled) { background-color: #2c8f42; }
+        /* ===== Reset & Base ===== */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: linear-gradient(135deg, #f4f7fb 0%, #e8ecf4 100%);
+            color: #333;
+            padding: 2rem;
+            line-height: 1.6;
+        }
+
+        /* ===== Container ===== */
+        .container {
+            max-width: 850px;
+            margin: auto;
+            background: #fff;
+            padding: 2.5rem;
+            border-radius: 16px;
+            box-shadow: 0 10px 35px rgba(0,0,0,0.08);
+            animation: fadeIn 0.5s ease;
+        }
+
+        /* ===== Headings ===== */
+        h1 {
+            color: #1a73e8;
+            text-align: center;
+            margin-bottom: 1.5rem;
+            font-weight: 700;
+        }
+        h3 {
+            margin-bottom: 0.75rem;
+            color: #333;
+            font-weight: 600;
+        }
+
+        /* ===== Inputs & Textareas ===== */
+        textarea, input[type="text"], input[type="file"] {
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid #d1d9e6;
+            border-radius: 8px;
+            box-sizing: border-box;
+            margin-top: 6px;
+            background-color: #fafbfc;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+        textarea:focus, input:focus {
+            border-color: #1a73e8;
+            box-shadow: 0 0 0 3px rgba(26,115,232,0.1);
+            outline: none;
+        }
+
+        /* ===== Buttons ===== */
+        button {
+            background: linear-gradient(90deg, #1a73e8, #0f5bb5);
+            color: white;
+            padding: 14px 18px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+            margin-top: 10px;
+            margin-bottom: 14px; /* ✅ extra bottom margin */
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }
+        button:disabled { background: #c5c8cc; cursor: not-allowed; }
+        button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(26,115,232,0.3); }
+
+        .auth-buttons button {
+            background: linear-gradient(90deg, #34a853, #2a7b3b);
+            width: calc(50% - 6px);
+            display: inline-block;
+        }
+        .auth-buttons button:hover:not(:disabled) { box-shadow: 0 4px 12px rgba(52,168,83,0.3); }
+        .auth-buttons { display: flex; gap: 12px; }
+
+        /* ===== Status Alerts ===== */
+        .error, .success, .info {
+            padding: 12px 14px;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            font-size: 14px;
+        }
+        .error { background: #fdecea; color: #d93025; border: 1px solid #f5c2c0; }
+        .success { background: #e6f4ea; color: #137333; border: 1px solid #b7dfb9; }
+        .info { background: #e8f0fe; color: #0b5394; border: 1px solid #c2dbff; }
+
+        /* ===== Loader ===== */
         #loader { display: none; text-align: center; margin: 20px 0; }
-        .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #1a73e8; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        .error { color: #d93025; background: #f8d7da; padding: 10px; border: 1px solid #f5c6cb; border-radius: 4px; margin-bottom: 1rem; }
-        .success { color: #155724; background: #d4edda; padding: 10px; border: 1px solid #c3e6cb; border-radius: 4px; margin-bottom: 1rem; }
-        .info { color: #0c5460; background: #d1ecf1; padding: 10px; border: 1px solid #bee5eb; border-radius: 4px; margin-bottom: 1rem; }
-        .json-output { background: #e9ecef; padding: 1rem; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word; max-height: 400px; overflow-y: auto; }
+        .spinner {
+            border: 4px solid #e6e6e6;
+            border-top: 4px solid #1a73e8;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ===== JSON Output ===== */
+        .json-output {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 8px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #d1d9e6;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            font-size: 14px;
+        }
+
+        /* ===== Table ===== */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+            background: #fff;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        td {
+            padding: 10px 14px;
+            border-bottom: 1px solid #eee;
+            font-size: 14px;
+        }
+        tr:last-child td { border-bottom: none; }
+        tr td:first-child { font-weight: 600; color: #444; }
+
+        /* ===== Animation ===== */
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px);} to { opacity: 1; transform: translateY(0);} }
     </style>
 
     <!-- External Libraries -->
@@ -150,6 +266,8 @@
                 <button id="signout_button" style="visibility: hidden;">Sign Out</button>
             </div>
             <button id="get-data-btn" disabled>Get Data & Add to Sheet</button>
+            <!-- ✅ New button for multiple bills -->
+            <button id="process-new-btn" style="display:none;background:linear-gradient(90deg,#f59e0b,#d97706);">Process New Bill</button>
         </div>
 
         <div id="loader"><div class="spinner"></div><p>Processing... Please wait.</p></div>
@@ -171,6 +289,7 @@
         const downloadSection = document.getElementById('download-section');
         const authorizeButton = document.getElementById('authorize_button');
         const signoutButton = document.getElementById('signout_button');
+        const processNewBtn = document.getElementById('process-new-btn');
 
         // Attach event listeners now that the DOM is ready
         authorizeButton.onclick = handleAuthClick;
@@ -178,7 +297,17 @@
         
         let billData = []; // Stores data for Excel download
 
-        const DEFAULT_PROMPT = `Scan this bill and tell me the following details in JSON format:\n1. Name of the Vendor\n2. Name of the company on which this bill has been raise\n3. Nature of expense\n4. Is TDS Applicable on this bill? If yes, what is the rate and amount?\n5. Is GST under RCM applicable?\n6. Is GST Input included in the bill?\n7. Is the nature of IGST or CGST and SGST as per Place of Supply in GST correct?\n8. What is the final amount payable to the vendor?\n9. Are there any remarks mentioned in the bill?\nReturn ONLY valid JSON without any extra text, explanation, or markdown formatting.`;
+        const DEFAULT_PROMPT = `Scan this bill and tell me the following details in JSON format:
+1. Name of the Vendor
+2. Name of the company on which this bill has been raise
+3. Nature of expense
+4. Is TDS Applicable on this bill? If yes, what is the rate and amount?
+5. Is GST under RCM applicable?
+6. Is GST Input included in the bill?
+7. Is the nature of IGST or CGST and SGST as per Place of Supply in GST correct?
+8. What is the final amount payable to the vendor?
+9. Are there any remarks mentioned in the bill?
+Return ONLY valid JSON without any extra text, explanation, or markdown formatting.`;
 
         pdfUpload.addEventListener('change', async (event) => {
             const file = event.target.files[0];
@@ -189,6 +318,7 @@
             extractedTextOutput.value = '';
             getDataBtn.disabled = true;
             extractedTextSection.style.display = 'block';
+            processNewBtn.style.display = 'none';
 
             showStatus('info', 'Step 1: Reading PDF file...');
             const fileReader = new FileReader();
@@ -301,33 +431,56 @@
         });
         
         async function appendToSheet(data) {
+            // ✅ Upgraded: ensure correct columns by checking/creating headers, then mapping values by header order.
             let sheetRange = 'Sheet1';
-            let headers = Object.keys(data);
-            let values = Object.values(data);
-            
+            let headersFromData = Object.keys(data);
+
             try {
-                const getResponse = await gapi.client.sheets.spreadsheets.values.get({
+                // Read existing header row
+                const getHeader = await gapi.client.sheets.spreadsheets.values.get({
                     spreadsheetId: SPREADSHEET_ID,
-                    range: sheetRange + '!A1:A1',
+                    range: sheetRange + '!1:1',
                 });
 
-                let rowsToAppend;
-                if (!getResponse.result.values) {
-                    rowsToAppend = [headers, values];
-                } else {
-                    rowsToAppend = [values];
+                // Existing headers in sheet (if any)
+                let existingHeaders = getHeader.result.values ? getHeader.result.values[0] : [];
+
+                // Add any missing headers from incoming data
+                let updateNeeded = false;
+                headersFromData.forEach(h => {
+                    if (!existingHeaders.includes(h)) {
+                        existingHeaders.push(h);
+                        updateNeeded = true;
+                    }
+                });
+
+                // If no header row existed, or we added new headers, write header row back
+                if (updateNeeded || existingHeaders.length === 0) {
+                    await gapi.client.sheets.spreadsheets.values.update({
+                        spreadsheetId: SPREADSHEET_ID,
+                        range: sheetRange + '!1:1',
+                        valueInputOption: 'USER_ENTERED',
+                        resource: { values: [existingHeaders] }
+                    });
                 }
 
-                const result = await gapi.client.sheets.spreadsheets.values.append({
+                // Order the row values according to existingHeaders to ensure correct columns
+                const orderedRow = existingHeaders.map(h => (h in data ? data[h] : ''));
+
+                // Append the ordered row
+                const appendResult = await gapi.client.sheets.spreadsheets.values.append({
                     spreadsheetId: SPREADSHEET_ID,
                     range: sheetRange,
                     valueInputOption: 'USER_ENTERED',
-                    resource: {
-                        values: rowsToAppend
-                    }
+                    resource: { values: [orderedRow] }
                 });
-                console.log('Sheet append result:', result);
+
+                console.log('Sheet append result:', appendResult);
                 showStatus('success', `Data successfully added to Google Sheet! View it <a href="https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/" target="_blank">here</a>.`, true);
+
+                // ✅ Show "Process New Bill" button for multi-bill workflow
+                processNewBtn.style.display = 'block';
+
             } catch (err) {
                 console.error('Error appending data to sheet:', err);
                 let errorMessage = err.result?.error?.message || 'Could not add data to Google Sheet. Check console for details.';
@@ -348,7 +501,7 @@
         function createDownloadButton() {
             const button = document.createElement('button');
             button.innerText = 'Download All Extracted Data (Excel)';
-            button.style.backgroundColor = '#ff9800'; // Orange color
+            button.style.background = 'linear-gradient(90deg, #f59e0b, #d97706)'; // Orange gradient
             button.onclick = () => {
                 if (billData.length === 0) { alert("No data to download."); return; }
                 const worksheet = XLSX.utils.json_to_sheet(billData);
@@ -364,6 +517,25 @@
             const targetDiv = isResult ? resultsDiv : statusArea;
             targetDiv.innerHTML = `<div class="${type}">${message}</div>`;
         }
+
+        // ✅ "Process New Bill" => reset UI for next file
+        function resetForNewBill() {
+            pdfUpload.value = "";
+            extractedTextOutput.value = "";
+            document.getElementById('bill-source').value = "";
+            document.getElementById('bill-given-by').value = "";
+            document.getElementById('hod-approval').value = "";
+            document.getElementById('final-approval').value = "";
+            resultsDiv.innerHTML = "";
+            statusArea.innerHTML = "";
+            downloadSection.innerHTML = "";
+            extractedTextSection.style.display = 'none';
+            getDataBtn.disabled = true;
+            processNewBtn.style.display = 'none';
+            showStatus('info', 'Ready for the next bill. Upload a PDF to begin.');
+        }
+
+        processNewBtn.addEventListener('click', resetForNewBill);
     </script>
 </body>
 </html>
